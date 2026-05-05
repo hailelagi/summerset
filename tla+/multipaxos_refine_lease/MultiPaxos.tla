@@ -1,9 +1,12 @@
-(**********************************************************************************)
-(* This spec extends multipaxos_smr_style/MultiPaxos.tla with extra features:     *)
-(*   [x] Only keep writes in the log (reads squeeze in between writes)            *)
-(*   [x] Asymmetric write/read quorum size                                        *)
-(*   [x] Stable leader lease and local read at leader                             *)
-(**********************************************************************************)
+(********************************************************************************)
+(* Models the MultiPaxos algorithm plus a "stable leader lease" gate that reads *)
+(* from a global bag of `grants`. Where grants come from is not specified here: *)
+(* the dedicated LeaseGrantsEvolve action lets the bag change freely, subject   *)
+(* only to the AtMostOneGrantPerNode invariant.                                 *)
+(*                                                                              *)
+(* This is a contract the separate lease protocol (LeaseProtocol.tla) honors,   *)
+(* and is also checked through refinement (MultiPaxosRefine.tla).               *)
+(********************************************************************************)
 
 ---- MODULE MultiPaxos ----
 EXTENDS FiniteSets, Sequences, Integers, TLC
@@ -15,10 +18,7 @@ CONSTANT Replicas,   \* symmetric set of server nodes
          Writes,     \* symmetric set of write commands (each w/ unique value)
          Reads,      \* symmetric set of read commands
          MaxBallot,  \* maximum ballot pickable for leader preemption
-         ReadQuorumSize,  \* read quorum size to allow for asymmetry
-         CommitNoticeOn,  \* if true, turn on CommitNotice messages
-         NodeFailuresOn,  \* if true, turn on node failures injection
-         StableLeaderOn   \* if true, turn on stable leader leases
+         NodeFailuresOn   \* if true, turn on node failures injection
 
 ReplicasAssumption == /\ IsFiniteSet(Replicas)
                       /\ Cardinality(Replicas) >= 1
@@ -41,26 +41,13 @@ ReadsAssumption == /\ IsFiniteSet(Reads)
 MaxBallotAssumption == /\ MaxBallot \in Nat
                        /\ MaxBallot >= 2
 
-ReadQuorumSizeAssumption == /\ ReadQuorumSize \in Nat
-                            /\ ReadQuorumSize >= 1
-                            /\ ReadQuorumSize =< MajorityNum
-
-WriteQuorumSize == (Population + 1) - ReadQuorumSize
-
-CommitNoticeOnAssumption == CommitNoticeOn \in BOOLEAN
-
 NodeFailuresOnAssumption == NodeFailuresOn \in BOOLEAN
-
-StableLeaderOnAssumption == StableLeaderOn \in BOOLEAN
 
 ASSUME /\ ReplicasAssumption
        /\ WritesAssumption
        /\ ReadsAssumption
        /\ MaxBallotAssumption
-       /\ ReadQuorumSizeAssumption
-       /\ CommitNoticeOnAssumption
        /\ NodeFailuresOnAssumption
-       /\ StableLeaderOnAssumption
 
 ----------
 
@@ -233,15 +220,18 @@ Messages ==      PrepareMsgs
             \cup DoReadReplyMsgs
             \cup CommitNoticeMsgs
 
-LeaseGrants == [from: Replicas, to: Replicas]
+\* Lease abstract grant typedefs.
+LeaseGrants == [from: Replicas, to: Replicas, bal: Ballots]
 
-LeaseGrant(f, t) == [from |-> f, to |-> t]
-                        \* this is the only type of message that may be
-                        \* "removed" from the global set of messages to make
-                        \* a "cheated" model of leasing: if a LeaseGrant
-                        \* message is removed, it means that promise has
-                        \* expired and the grantor did not refresh, possibly
-                        \* in order to grant to someone else
+LeaseGrant(f, t, b) == [from |-> f, to |-> t, bal |-> b]
+                        \* the `grants` bag is a variable that evolves
+                        \* freely via LeaseGrantsEvolve action, subject
+                        \* only to AtMostOneGrantPerNode. The separate
+                        \* lease protocol (LeaseProtocol.tla) asserts
+                        \* this is always honored, and is also checked
+                        \* through refinement (MultiPaxosRefine.tla)
+                        \* that replaces LeaseGrantsEvolve with real
+                        \* lease protocol transitions
 
 ----------
 
@@ -251,18 +241,26 @@ LeaseGrant(f, t) == [from |-> f, to |-> t]
 (*--algorithm MultiPaxos
 
 variable msgs = {},                             \* messages in the network
-         grants = {},                           \* lease msgs in the network
+         grants = {},                           \* bag of (from, to) grants
          node = [r \in Replicas |-> NullNode],  \* replica node state
          pending = InitPending,                 \* sequence of pending reqs
          observed = <<>>,                       \* client observed events
          crashed = [r \in Replicas |-> FALSE];  \* replica crashed flag
 
 define
+    \* assertion for LeaseProtocol correctness, used to bound grants evolution
+    \* when checking this spec independently -- to check this assertion holds
+    \* when composed with LeaseProtocol, check the MultiPaxosRefine refinement
+    AtMostOneGrantPerNodeIn(gs) ==
+        \A f \in Replicas, b \in Ballots:
+            Cardinality({g \in gs: g.from = f /\ g.bal = b}) =< 1
+
     ThinkAmLeader(r) == /\ node[r].leader = r
                         /\ node[r].balPrepared = node[r].balMaxKnown
-                        /\ \/ ~StableLeaderOn
-                           \/ Cardinality({g \in grants:
-                                           g.to = r}) >= MajorityNum
+                        /\ Cardinality({g \in grants:
+                                            /\ g.to = r
+                                            /\ g.bal = node[r].balMaxKnown})
+                           >= MajorityNum
 
     AppendObserved(seq) ==
         LET filter(e) == e \notin Range(observed)
@@ -293,12 +291,6 @@ end define;
 \* Send a set of messages helper.
 macro Send(set) begin
     msgs := msgs \cup set;
-end macro;
-
-\* Expire existing lease grant from f, and make a new repeatedly refreshed
-\* lease grant to t.
-macro Lease(f, t) begin
-    grants := {g \in grants: g.from # f} \cup {LeaseGrant(f, t)};
 end macro;
 
 \* Observe client events helper.
@@ -337,9 +329,10 @@ macro BecomeLeader(r) begin
         Send({PrepareMsg(r, b),
               PrepareReplyMsg(r, b, VotesByNode(node[r]))});
         \* expire my old lease grant if any and grant to myself
-        if StableLeaderOn then
-            Lease(r, r);
-        end if;
+        \* Note: this is implemented here as an await, meaning it needs
+        \* grants to evolve in this particular way, which happens when
+        \* node r LearnsNewLeader in LeaseProtocol.tla
+        await \A g \in grants: (g.from = r /\ g.bal = b) => g.to = r;
     end with;
 end macro;
 
@@ -361,9 +354,10 @@ macro HandlePrepare(r) begin
         \* send back PrepareReply with my voted list
         Send({PrepareReplyMsg(r, m.bal, VotesByNode(node[r]))});
         \* expire my old lease grant if any and grant to new leader
-        if StableLeaderOn then
-            Lease(r, m.src);
-        end if;
+        \* Note: this is implemented here as an await, meaning it needs
+        \* grants to evolve in this particular way, which happens when
+        \* node r LearnsNewLeader in LeaseProtocol.tla
+        await \A g \in grants: (g.from = r /\ g.bal = m.bal) => g.to = m.src;
     end with;
 end macro;
 
@@ -449,6 +443,12 @@ macro HandleAccept(r) begin
         node[r].insts[m.slot].voted.write := m.write;
         \* send back AcceptReply
         Send({AcceptReplyMsg(r, m.bal, m.slot)});
+        \* in case known leader changed, expire my old lease grant if any
+        \* and grant to new leader
+        \* Note: this is implemented here as an await, meaning it needs
+        \* grants to evolve in this particular way, which happens when
+        \* node r LearnsNewLeader in LeaseProtocol.tla
+        await \A g \in grants: (g.from = r /\ g.bal = m.bal) => g.to = m.src;
     end with;
 end macro;
 
@@ -472,7 +472,7 @@ macro HandleAcceptReplies(r) begin
                             /\ m.slot = s
                             /\ m.bal = node[r].balPrepared}
     do
-        await Cardinality(ars) >= WriteQuorumSize;
+        await Cardinality(ars) >= MajorityNum;
         \* marks this slot as committed and apply command
         node[r].insts[s].status := "Committed" ||
         node[r].commitUpTo := s;
@@ -481,9 +481,7 @@ macro HandleAcceptReplies(r) begin
         Observe(<<AckEvent(c, v)>>);
         Resolve(c);
         \* broadcast CommitNotice to followers
-        if CommitNoticeOn then
-            Send({CommitNoticeMsg(s)});
-        end if;
+        Send({CommitNoticeMsg(s)});
     end with;
 end macro;
 
@@ -591,7 +589,7 @@ macro HandleDoReadReplies(r) begin
                             /\ m.read = c
                             /\ m.bal = node[r].balPrepared}
     do
-        await /\ Cardinality(drs) >= ReadQuorumSize
+        await /\ Cardinality(drs) >= MajorityNum
               /\ node[r].commitUpTo >= ps;
                     \* W.L.O.G., only enabling slots at or before commitUpTo
                     \* here to make the body of this macro simpler; in
@@ -608,8 +606,8 @@ end macro;
 
 \* Replica node crashes itself under promised conditions.
 macro ReplicaCrashes(r) begin
-    \* if less than (N - WriteQuourmSize) number of replicas have failed
-    await /\ WriteQuorumSize + numCrashed < Cardinality(Replicas)
+    \* if less than (N - MajorityNum) number of replicas have failed
+    await /\ MajorityNum + numCrashed < Cardinality(Replicas)
           /\ ~crashed[r]
           /\ node[r].balMaxKnown < MaxBallot;
                 \* this clause is needed only because we have an upper
@@ -636,15 +634,9 @@ begin
         or
             HandleAcceptReplies(self);
         or
-            if CommitNoticeOn then
-                HandleCommitNotice(self);
-            end if;
+            HandleCommitNotice(self);
         or
-            if ~StableLeaderOn then
-                TakeNewReadRequest(self);
-            else
-                TakeNewReadRequestLocally(self);
-            end if;
+            TakeNewReadRequestLocally(self);
         or
             HandleDoRead(self);
         or
@@ -661,15 +653,20 @@ end algorithm; *)
 
 ----------
 
-\* BEGIN TRANSLATION (chksum(pcal) = "e4c83727" /\ chksum(tla) = "93c53d0")
+\* BEGIN TRANSLATION (chksum(pcal) = "55992ec6" /\ chksum(tla) = "15bf90a5")
 VARIABLES pc, msgs, grants, node, pending, observed, crashed
 
 (* define statement *)
+AtMostOneGrantPerNodeIn(gs) ==
+    \A f \in Replicas, b \in Ballots:
+        Cardinality({g \in gs: g.from = f /\ g.bal = b}) =< 1
+
 ThinkAmLeader(r) == /\ node[r].leader = r
                     /\ node[r].balPrepared = node[r].balMaxKnown
-                    /\ \/ ~StableLeaderOn
-                       \/ Cardinality({g \in grants:
-                                       g.to = r}) >= MajorityNum
+                    /\ Cardinality({g \in grants:
+                                        /\ g.to = r
+                                        /\ g.bal = node[r].balMaxKnown})
+                       >= MajorityNum
 
 AppendObserved(seq) ==
     LET filter(e) == e \notin Range(observed)
@@ -727,10 +724,7 @@ rloop(self) == /\ pc[self] = "rloop"
                                                              ![self].reads = [s \in Slots \cup {NumWrites+1} |-> {}]]
                                      /\ msgs' = (msgs \cup ({PrepareMsg(self, b),
                                                              PrepareReplyMsg(self, b, VotesByNode(node'[self]))}))
-                                     /\ IF StableLeaderOn
-                                           THEN /\ grants' = ({g \in grants: g.from # self} \cup {LeaseGrant(self, self)})
-                                           ELSE /\ TRUE
-                                                /\ UNCHANGED grants
+                                     /\ \A g \in grants: (g.from = self /\ g.bal = b) => g.to = self
                                 /\ UNCHANGED <<pending, observed, crashed>>
                              \/ /\ \E m \in msgs:
                                      /\ /\ m.type = "Prepare"
@@ -743,10 +737,7 @@ rloop(self) == /\ pc[self] = "rloop"
                                                                                                          THEN "Preparing"
                                                                                                          ELSE @]]]
                                      /\ msgs' = (msgs \cup ({PrepareReplyMsg(self, m.bal, VotesByNode(node'[self]))}))
-                                     /\ IF StableLeaderOn
-                                           THEN /\ grants' = ({g \in grants: g.from # self} \cup {LeaseGrant(self, (m.src))})
-                                           ELSE /\ TRUE
-                                                /\ UNCHANGED grants
+                                     /\ \A g \in grants: (g.from = self /\ g.bal = m.bal) => g.to = m.src
                                 /\ UNCHANGED <<pending, observed, crashed>>
                              \/ /\ /\ node[self].leader = self
                                    /\ node[self].balPrepared = 0
@@ -772,7 +763,7 @@ rloop(self) == /\ pc[self] = "rloop"
                                                             {{AcceptMsg(self, node'[self].balPrepared, s, node'[self].insts[s].write),
                                                               AcceptReplyMsg(self, node'[self].balPrepared, s)}:
                                                              s \in {s \in Slots: node'[self].insts[s].status = "Accepting"}}))
-                                /\ UNCHANGED <<grants, pending, observed, crashed>>
+                                /\ UNCHANGED <<pending, observed, crashed>>
                              \/ /\ /\ ThinkAmLeader(self)
                                    /\ \E s \in Slots: node[self].insts[s].status = "Empty"
                                    /\ Len(UnseenPending(self)) > 0
@@ -786,7 +777,7 @@ rloop(self) == /\ pc[self] = "rloop"
                                        /\ msgs' = (msgs \cup ({AcceptMsg(self, node'[self].balPrepared, s, c),
                                                                AcceptReplyMsg(self, node'[self].balPrepared, s)}))
                                        /\ observed' = AppendObserved((<<ReqEvent(c)>>))
-                                /\ UNCHANGED <<grants, pending, crashed>>
+                                /\ UNCHANGED <<pending, crashed>>
                              \/ /\ \E m \in msgs:
                                      /\ /\ m.type = "Accept"
                                         /\ m.bal >= node[self].balMaxKnown
@@ -798,7 +789,8 @@ rloop(self) == /\ pc[self] = "rloop"
                                                              ![self].insts[m.slot].voted.bal = m.bal,
                                                              ![self].insts[m.slot].voted.write = m.write]
                                      /\ msgs' = (msgs \cup ({AcceptReplyMsg(self, m.bal, m.slot)}))
-                                /\ UNCHANGED <<grants, pending, observed, crashed>>
+                                     /\ \A g \in grants: (g.from = self /\ g.bal = m.bal) => g.to = m.src
+                                /\ UNCHANGED <<pending, observed, crashed>>
                              \/ /\ /\ ThinkAmLeader(self)
                                    /\ node[self].commitUpTo < NumWrites
                                    /\ node[self].insts[node[self].commitUpTo+1].status = "Accepting"
@@ -809,52 +801,34 @@ rloop(self) == /\ pc[self] = "rloop"
                                            LET ars == {m \in msgs: /\ m.type = "AcceptReply"
                                                                    /\ m.slot = s
                                                                    /\ m.bal = node[self].balPrepared} IN
-                                             /\ Cardinality(ars) >= WriteQuorumSize
+                                             /\ Cardinality(ars) >= MajorityNum
                                              /\ node' = [node EXCEPT ![self].insts[s].status = "Committed",
                                                                      ![self].commitUpTo = s]
                                              /\ observed' = AppendObserved((<<AckEvent(c, v)>>))
                                              /\ pending' = RemovePending(c)
-                                             /\ IF CommitNoticeOn
-                                                   THEN /\ msgs' = (msgs \cup ({CommitNoticeMsg(s)}))
-                                                   ELSE /\ TRUE
-                                                        /\ msgs' = msgs
-                                /\ UNCHANGED <<grants, crashed>>
-                             \/ /\ IF CommitNoticeOn
-                                      THEN /\ /\ node[self].leader # self
-                                              /\ node[self].commitUpTo < NumWrites
-                                              /\ node[self].insts[node[self].commitUpTo+1].status = "Accepting"
-                                           /\ LET s == node[self].commitUpTo + 1 IN
-                                                LET c == node[self].insts[s].write IN
-                                                  \E m \in msgs:
-                                                    /\ /\ m.type = "CommitNotice"
-                                                       /\ m.upto = s
-                                                    /\ node' = [node EXCEPT ![self].insts[s].status = "Committed",
-                                                                            ![self].commitUpTo = s]
-                                      ELSE /\ TRUE
-                                           /\ node' = node
-                                /\ UNCHANGED <<msgs, grants, pending, observed, crashed>>
-                             \/ /\ IF ~StableLeaderOn
-                                      THEN /\ /\ ThinkAmLeader(self)
-                                              /\ Len(UnseenPending(self)) > 0
-                                              /\ Head(UnseenPending(self)) \in Reads
-                                           /\ LET s == FirstEmptySlot(node[self].insts) IN
-                                                LET c == Head(UnseenPending(self)) IN
-                                                  /\ msgs' = (msgs \cup ({DoReadMsg(self, node[self].balPrepared, s, c),
-                                                                          DoReadReplyMsg(self, node[self].balPrepared, s, c)}))
-                                                  /\ node' = [node EXCEPT ![self].reads[s] = @ \cup {c}]
-                                                  /\ observed' = AppendObserved((<<ReqEvent(c)>>))
-                                           /\ UNCHANGED pending
-                                      ELSE /\ /\ ThinkAmLeader(self)
-                                              /\ node[self].commitUpTo >= node[self].commitPrev
-                                              /\ Len(UnseenPending(self)) > 0
-                                              /\ Head(UnseenPending(self)) \in Reads
-                                           /\ LET s == node[self].commitUpTo IN
-                                                LET v == IF s = 0 THEN "nil" ELSE node[self].insts[s].write IN
-                                                  LET c == Head(UnseenPending(self)) IN
-                                                    /\ observed' = AppendObserved((<<ReqEvent(c), AckEvent(c, v)>>))
-                                                    /\ pending' = RemovePending(c)
-                                           /\ UNCHANGED << msgs, node >>
-                                /\ UNCHANGED <<grants, crashed>>
+                                             /\ msgs' = (msgs \cup ({CommitNoticeMsg(s)}))
+                                /\ UNCHANGED crashed
+                             \/ /\ /\ node[self].leader # self
+                                   /\ node[self].commitUpTo < NumWrites
+                                   /\ node[self].insts[node[self].commitUpTo+1].status = "Accepting"
+                                /\ LET s == node[self].commitUpTo + 1 IN
+                                     LET c == node[self].insts[s].write IN
+                                       \E m \in msgs:
+                                         /\ /\ m.type = "CommitNotice"
+                                            /\ m.upto = s
+                                         /\ node' = [node EXCEPT ![self].insts[s].status = "Committed",
+                                                                 ![self].commitUpTo = s]
+                                /\ UNCHANGED <<msgs, pending, observed, crashed>>
+                             \/ /\ /\ ThinkAmLeader(self)
+                                   /\ node[self].commitUpTo >= node[self].commitPrev
+                                   /\ Len(UnseenPending(self)) > 0
+                                   /\ Head(UnseenPending(self)) \in Reads
+                                /\ LET s == node[self].commitUpTo IN
+                                     LET v == IF s = 0 THEN "nil" ELSE node[self].insts[s].write IN
+                                       LET c == Head(UnseenPending(self)) IN
+                                         /\ observed' = AppendObserved((<<ReqEvent(c), AckEvent(c, v)>>))
+                                         /\ pending' = RemovePending(c)
+                                /\ UNCHANGED <<msgs, node, crashed>>
                              \/ /\ \E m \in msgs:
                                      /\ /\ m.type = "DoRead"
                                         /\ m.bal >= node[self].balMaxKnown
@@ -862,7 +836,7 @@ rloop(self) == /\ pc[self] = "rloop"
                                            \/ /\ m.slot =< NumWrites
                                               /\ m.bal >= node[self].insts[m.slot].voted.bal
                                      /\ msgs' = (msgs \cup ({DoReadReplyMsg(self, m.bal, m.slot, m.read)}))
-                                /\ UNCHANGED <<grants, node, pending, observed, crashed>>
+                                /\ UNCHANGED <<node, pending, observed, crashed>>
                              \/ /\ ThinkAmLeader(self)
                                 /\ \E s \in (Slots \cup {NumWrites+1}):
                                      \E c \in node[self].reads[s]:
@@ -872,24 +846,25 @@ rloop(self) == /\ pc[self] = "rloop"
                                                                    /\ m.slot = s
                                                                    /\ m.read = c
                                                                    /\ m.bal = node[self].balPrepared} IN
-                                             /\ /\ Cardinality(drs) >= ReadQuorumSize
+                                             /\ /\ Cardinality(drs) >= MajorityNum
                                                 /\ node[self].commitUpTo >= ps
                                              /\ observed' = AppendObserved((<<AckEvent(c, v)>>))
                                              /\ pending' = RemovePending(c)
                                              /\ node' = [node EXCEPT ![self].reads[s] = @ \ {c}]
-                                /\ UNCHANGED <<msgs, grants, crashed>>
+                                /\ UNCHANGED <<msgs, crashed>>
                              \/ /\ IF NodeFailuresOn
-                                      THEN /\ /\ WriteQuorumSize + numCrashed < Cardinality(Replicas)
+                                      THEN /\ /\ MajorityNum + numCrashed < Cardinality(Replicas)
                                               /\ ~crashed[self]
                                               /\ node[self].balMaxKnown < MaxBallot
                                            /\ crashed' = [crashed EXCEPT ![self] = TRUE]
                                       ELSE /\ TRUE
                                            /\ UNCHANGED crashed
-                                /\ UNCHANGED <<msgs, grants, node, pending, observed>>
+                                /\ UNCHANGED <<msgs, node, pending, observed>>
                           /\ pc' = [pc EXCEPT ![self] = "rloop"]
                      ELSE /\ pc' = [pc EXCEPT ![self] = "Done"]
-                          /\ UNCHANGED << msgs, grants, node, pending, 
-                                          observed, crashed >>
+                          /\ UNCHANGED << msgs, node, pending, observed, 
+                                          crashed >>
+               /\ UNCHANGED grants
 
 Replica(self) == rloop(self)
 
@@ -905,5 +880,24 @@ Spec == Init /\ [][Next]_vars
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
 \* END TRANSLATION
+
+----------
+
+(************************************************************************)
+(* Grants free evolution action, layered on top of the translated spec. *)
+(************************************************************************)
+varsExceptGrants == <<msgs, node, pending, observed, crashed, pc>>
+
+LeaseGrantsEvolve ==
+    /\ \E new_grants \in SUBSET LeaseGrants:
+         /\ AtMostOneGrantPerNodeIn(new_grants)
+         /\ grants' = new_grants
+    /\ UNCHANGED varsExceptGrants
+
+AbstractNext == \/ (\E self \in Replicas: Replica(self))
+                \/ LeaseGrantsEvolve
+                \/ Terminating
+
+AbstractSpec == Init /\ [][AbstractNext]_vars
 
 ====

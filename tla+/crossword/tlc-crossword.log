@@ -2,7 +2,6 @@ TLC2 Version 2.20 of Day Month 20?? (rev: 96056d9)
 Running breadth-first search Model-Checking with fp 94 and seed 2363880618346732627 with 128 workers on 128 cores with 27305MB heap and 64MB offheap memory [pid: 39535] (Linux 6.8.0-59-generic amd64, Ubuntu 21.0.7 x86_64, MSBDiskFPSet, DiskStateQueue).
 Parsing file /users/josehu/summerset/tla+/crossword/Crossword_MC.tla
 Parsing file /users/josehu/summerset/tla+/crossword/Crossword.tla
-!! WARNING: The PlusCal algorithm in module Crossword has changed since its last translation.
 Parsing file /tmp/tlc-154805870800094538/FiniteSets.tla (jar:file:/users/josehu/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
 Parsing file /tmp/tlc-154805870800094538/Sequences.tla (jar:file:/users/josehu/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
 Parsing file /tmp/tlc-154805870800094538/Integers.tla (jar:file:/users/josehu/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)

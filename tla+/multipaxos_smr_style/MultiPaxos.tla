@@ -295,13 +295,18 @@ macro HandlePrepareReplies(r) begin
         node[r].balPrepared := node[r].balMaxKnown ||
         node[r].insts :=
             [s \in Slots |->
-                [node[r].insts[s]
-                    EXCEPT !.status = IF \/ @ = "Preparing"
-                                         \/ /\ @ = "Empty"
-                                            /\ PeakVotedCmd(prs, s) # "nil"
-                                        THEN "Accepting"
-                                        ELSE @,
-                           !.cmd = PeakVotedCmd(prs, s)]];
+                LET adopted == \/ node[r].insts[s].status = "Preparing"
+                               \/ /\ node[r].insts[s].status = "Empty"
+                                  /\ PeakVotedCmd(prs, s) # "nil"
+                IN  [node[r].insts[s]
+                        EXCEPT !.status = IF adopted
+                                            THEN "Accepting"
+                                            ELSE @,
+                               !.cmd    = PeakVotedCmd(prs, s),
+                               !.voted  = IF adopted
+                                            THEN [bal |-> node[r].balMaxKnown,
+                                                  cmd |-> PeakVotedCmd(prs, s)]
+                                            ELSE @]];
         \* send Accept messages for in-progress instances and reply to
         \* myself instantly
         Send(UNION
@@ -457,8 +462,8 @@ end algorithm; *)
 
 ----------
 
-\* BEGIN TRANSLATION (chksum(pcal) = "9431ae0c" /\ chksum(tla) = "7c75424")
-VARIABLES msgs, node, pending, observed, crashed, pc
+\* BEGIN TRANSLATION (chksum(pcal) = "97429d6" /\ chksum(tla) = "c657df0d")
+VARIABLES pc, msgs, node, pending, observed, crashed
 
 (* define statement *)
 UnseenPending(insts) ==
@@ -480,7 +485,7 @@ terminated == /\ Len(pending) = 0
 numCrashed == Cardinality({r \in Replicas: crashed[r]})
 
 
-vars == << msgs, node, pending, observed, crashed, pc >>
+vars == << pc, msgs, node, pending, observed, crashed >>
 
 ProcSet == (Replicas)
 
@@ -528,13 +533,18 @@ rloop(self) == /\ pc[self] = "rloop"
                                      /\ Cardinality(prs) >= MajorityNum
                                      /\ node' = [node EXCEPT ![self].balPrepared = node[self].balMaxKnown,
                                                              ![self].insts = [s \in Slots |->
-                                                                                 [node[self].insts[s]
-                                                                                     EXCEPT !.status = IF \/ @ = "Preparing"
-                                                                                                          \/ /\ @ = "Empty"
-                                                                                                             /\ PeakVotedCmd(prs, s) # "nil"
-                                                                                                         THEN "Accepting"
-                                                                                                         ELSE @,
-                                                                                            !.cmd = PeakVotedCmd(prs, s)]]]
+                                                                                 LET adopted == \/ node[self].insts[s].status = "Preparing"
+                                                                                                \/ /\ node[self].insts[s].status = "Empty"
+                                                                                                   /\ PeakVotedCmd(prs, s) # "nil"
+                                                                                 IN  [node[self].insts[s]
+                                                                                         EXCEPT !.status = IF adopted
+                                                                                                             THEN "Accepting"
+                                                                                                             ELSE @,
+                                                                                                !.cmd    = PeakVotedCmd(prs, s),
+                                                                                                !.voted  = IF adopted
+                                                                                                             THEN [bal |-> node[self].balMaxKnown,
+                                                                                                                   cmd |-> PeakVotedCmd(prs, s)]
+                                                                                                             ELSE @]]]
                                      /\ msgs' = (msgs \cup (UNION
                                                             {{AcceptMsg(self, node'[self].balPrepared, s, node'[self].insts[s].cmd),
                                                               AcceptReplyMsg(self, node'[self].balPrepared, s)}:

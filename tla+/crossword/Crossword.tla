@@ -363,17 +363,23 @@ macro HandlePrepareReplies(r) begin
         node[r].balPrepared := node[r].balMaxKnown ||
         node[r].insts :=
             [s \in Slots |->
-                [node[r].insts[s]
-                    EXCEPT !.status = IF /\ \/ @ = "Empty"
-                                            \/ @ = "Preparing"
-                                            \/ @ = "Accepting"
-                                         /\ exam[s].cmd # "nil"
-                                        THEN "Accepting"
-                                      ELSE IF @ = "Committed"
-                                        THEN "Committed"
-                                      ELSE "Empty",
-                           !.cmd    = exam[s].cmd,
-                           !.shards = exam[s].shards]];
+                LET adopted == /\ \/ node[r].insts[s].status = "Empty"
+                                  \/ node[r].insts[s].status = "Preparing"
+                                  \/ node[r].insts[s].status = "Accepting"
+                               /\ exam[s].cmd # "nil"
+                IN  [node[r].insts[s]
+                        EXCEPT !.status = IF adopted
+                                            THEN "Accepting"
+                                          ELSE IF @ = "Committed"
+                                            THEN "Committed"
+                                          ELSE "Empty",
+                               !.cmd    = exam[s].cmd,
+                               !.shards = exam[s].shards,
+                               !.voted  = IF adopted
+                                            THEN [bal |-> node[r].balMaxKnown,
+                                                  cmd |-> exam[s].cmd,
+                                                  shards |-> exam[s].shards]
+                                            ELSE @]];
         \* pick a reasonable shard assignment and send Accept messages for
         \* in-progress instances according to it
         with assign \in ValidAssignments do
@@ -544,8 +550,8 @@ end algorithm; *)
 
 ----------
 
-\* BEGIN TRANSLATION (chksum(pcal) = "2c6ba958" /\ chksum(tla) = "3272c05f")
-VARIABLES msgs, node, pending, observed, crashed, pc
+\* BEGIN TRANSLATION (chksum(pcal) = "3ad028fa" /\ chksum(tla) = "469611fd")
+VARIABLES pc, msgs, node, pending, observed, crashed
 
 (* define statement *)
 UnseenPending(insts) ==
@@ -567,7 +573,7 @@ terminated == /\ Len(pending) = 0
 numCrashed == Cardinality({r \in Replicas: crashed[r]})
 
 
-vars == << msgs, node, pending, observed, crashed, pc >>
+vars == << pc, msgs, node, pending, observed, crashed >>
 
 ProcSet == (Replicas)
 
@@ -616,17 +622,23 @@ rloop(self) == /\ pc[self] = "rloop"
                                        /\ \A s \in Slots: exam[s].prepared
                                        /\ node' = [node EXCEPT ![self].balPrepared = node[self].balMaxKnown,
                                                                ![self].insts = [s \in Slots |->
-                                                                                   [node[self].insts[s]
-                                                                                       EXCEPT !.status = IF /\ \/ @ = "Empty"
-                                                                                                               \/ @ = "Preparing"
-                                                                                                               \/ @ = "Accepting"
-                                                                                                            /\ exam[s].cmd # "nil"
-                                                                                                           THEN "Accepting"
-                                                                                                         ELSE IF @ = "Committed"
-                                                                                                           THEN "Committed"
-                                                                                                         ELSE "Empty",
-                                                                                              !.cmd    = exam[s].cmd,
-                                                                                              !.shards = exam[s].shards]]]
+                                                                                   LET adopted == /\ \/ node[self].insts[s].status = "Empty"
+                                                                                                     \/ node[self].insts[s].status = "Preparing"
+                                                                                                     \/ node[self].insts[s].status = "Accepting"
+                                                                                                  /\ exam[s].cmd # "nil"
+                                                                                   IN  [node[self].insts[s]
+                                                                                           EXCEPT !.status = IF adopted
+                                                                                                               THEN "Accepting"
+                                                                                                             ELSE IF @ = "Committed"
+                                                                                                               THEN "Committed"
+                                                                                                             ELSE "Empty",
+                                                                                                  !.cmd    = exam[s].cmd,
+                                                                                                  !.shards = exam[s].shards,
+                                                                                                  !.voted  = IF adopted
+                                                                                                               THEN [bal |-> node[self].balMaxKnown,
+                                                                                                                     cmd |-> exam[s].cmd,
+                                                                                                                     shards |-> exam[s].shards]
+                                                                                                               ELSE @]]]
                                        /\ \E assign \in ValidAssignments:
                                             msgs' = (msgs \cup (     {AcceptMsg(self, d, node'[self].balPrepared, s,
                                                                                 node'[self].insts[s].cmd, assign[d]):

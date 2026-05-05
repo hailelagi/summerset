@@ -1,9 +1,9 @@
 (**********************************************************************************)
 (* Bodega protocol enabling always-local follower reads in WAN-scale consensus by *)
 (* employing a lease-less always-local follower read technique on the critical    *)
-(* path and using off-the-critical-path config leases to retain fault-tolerance.  *)
+(* path and using off-the-critical-path roster leases to retain fault-tolerance.  *)
 (*                                                                                *)
-(* See multipaxos_smr_addon/MultiPaxos.tla for the base spec it extends from.     *)
+(* See multipaxos_refine_lease/MultiPaxos.tla for the base spec it extends from.  *)
 (**********************************************************************************)
 
 ---- MODULE Bodega ----
@@ -87,6 +87,16 @@ Ballots == 1..MaxBallot
 
 Slots == 1..NumWrites
 
+Rosters == {ros \in [bal: Ballots, leader: Replicas, responders: SUBSET Replicas]:
+            ros.leader \notin ros.responders}
+
+Roster(b, l, resps) == [bal |-> b, leader |-> l, responders |-> resps]
+                        \* each new ballot number maps to a new roster; this
+                        \* includes the change of leader (as in classic
+                        \* MultiPaxos) and/or the change of who're responders
+
+NullRoster == [bal |-> 0, leader |-> "none", responders |-> {}]
+
 Statuses == {"Preparing", "Accepting", "Committed"}
 
 InstStates == [status: {"Empty"} \cup Statuses,
@@ -103,6 +113,10 @@ NodeStates == [leader: {"none"} \cup Replicas,
                commitPrev: {0} \cup Slots \cup {NumWrites+1},
                balPrepared: {0} \cup Ballots,
                balMaxKnown: {0} \cup Ballots,
+               \* only for LearnsNewRoster composition with RosterLeases.tla;
+               \* in practice lease evolution is triggered at the moment a new
+               \* higher-ballot roster is seen
+               rosMaxKnown: {NullRoster} \cup Rosters,
                insts: [Slots -> InstStates]]
 
 NullNode == [leader |-> "none",
@@ -110,6 +124,7 @@ NullNode == [leader |-> "none",
              commitPrev |-> 0,
              balPrepared |-> 0,
              balMaxKnown |-> 0,
+             rosMaxKnown |-> NullRoster,
              insts |-> [s \in Slots |-> NullInst]]
                 \* commitPrev is the last slot which might have been
                 \* committed by an old leader; a newly prepared leader
@@ -211,24 +226,18 @@ Messages ==      PrepareMsgs
             \cup AcceptReplyMsgs
             \cup CommitNoticeMsgs
 
-\* Config lease related typedefs.
-Configs == {cfg \in [bal: Ballots, leader: Replicas, responders: SUBSET Replicas]:
-            cfg.leader \notin cfg.responders}
+\* Lease abstract grant typedefs.
+LeaseGrants == [from: Replicas, roster: Rosters]
 
-Config(b, l, resps) == [bal |-> b, leader |-> l, responders |-> resps]
-                        \* each new ballot number maps to a new config; this
-                        \* includes the change of leader (as in classic
-                        \* MultiPaxos) and/or the change of who're responders
-
-LeaseGrants == [from: Replicas, config: Configs]
-
-LeaseGrant(f, cfg) == [from |-> f, config |-> cfg]
-                        \* this is the only type of message that may be
-                        \* "removed" from the global set of messages to make
-                        \* a "cheated" model of leasing: if a LeaseGrant
-                        \* message is removed, it means that promise has
-                        \* expired and the grantor did not refresh, probably
-                        \* making way for switching to a different config
+LeaseGrant(f, ros) == [from |-> f, roster |-> ros]
+                        \* the `grants` bag is a variable that evolves
+                        \* freely via LeaseGrantsEvolve action, subject
+                        \* only to AtMostOneGrantPerNode. The separate
+                        \* roster leases protocol (RosterLeases.tla)
+                        \* asserts this is always honored, and is also
+                        \* checked via refinement (MultiPaxosRefine.tla)
+                        \* that replaces LeaseGrantsEvolve with real
+                        \* lease protocol transitions
 
 ----------
 
@@ -238,41 +247,46 @@ LeaseGrant(f, cfg) == [from |-> f, config |-> cfg]
 (*--algorithm Bodega
 
 variable msgs = {},                             \* messages in the network
-         grants = {},                           \* lease msgs in the network
+         grants = {},                           \* bag of (from, roster) grants
          node = [r \in Replicas |-> NullNode],  \* replica node state
          pending = InitPending,                 \* sequence of pending reqs
          observed = <<>>,                       \* client observed events
          crashed = [r \in Replicas |-> FALSE];  \* replica crashed flag
 
 define
-    CurrentConfig ==
+    \* assertion for RosterLeases correctness, used to bound grants evolution
+    \* when checking this spec independently -- to check this assertion holds
+    \* when composed with RosterLeases, check the BodegaRefine refinement
+    AtMostOneGrantPerNodeIn(gs) ==
+        \A f \in Replicas, b \in Ballots:
+            Cardinality({g \in gs: g.from = f /\ g.roster.bal = b}) =< 1
+
+    CurrentStableRoster ==
         LET leased(b) == Cardinality({g \in grants:
-                                      g.config.bal = b}) >= MajorityNum
+                                      g.roster.bal = b}) >= MajorityNum
         IN  IF ~\E b \in Ballots: leased(b)
-                THEN Config(0, "none", 0)
-                ELSE (CHOOSE g \in grants: leased(g.config.bal)).config
-                        \* the leasing mechanism ensures that at any
-                        \* time, there's at most one leader
+                THEN NullRoster
+                ELSE (CHOOSE g \in grants: leased(g.roster.bal)).roster
 
     ThinkAmLeader(r) == /\ node[r].leader = r
                         /\ node[r].balPrepared = node[r].balMaxKnown
-                        /\ CurrentConfig.bal > 0
-                        /\ CurrentConfig.bal = node[r].balMaxKnown
-                        /\ CurrentConfig.leader = r
+                        /\ CurrentStableRoster.bal > 0
+                        /\ CurrentStableRoster.bal = node[r].balMaxKnown
+                        /\ CurrentStableRoster.leader = r
 
     ThinkAmFollower(r) == /\ node[r].leader # r
-                          /\ CurrentConfig.bal > 0
-                          /\ CurrentConfig.bal = node[r].balMaxKnown
-                          /\ CurrentConfig.leader # r
+                          /\ CurrentStableRoster.bal > 0
+                          /\ CurrentStableRoster.bal = node[r].balMaxKnown
+                          /\ CurrentStableRoster.leader # r
     
     ThinkAmResponder(r) == /\ ThinkAmFollower(r)
-                           /\ r \in CurrentConfig.responders
+                           /\ r \in CurrentStableRoster.responders
 
-    BallotTransfered(r) == node[r].commitUpTo >= node[r].commitPrev
+    BallotTransferred(r) == node[r].commitUpTo >= node[r].commitPrev
 
     WriteCommittable(ars) ==
         /\ Cardinality({ar.src: ar \in ars}) >= MajorityNum
-        /\ CurrentConfig.responders \subseteq {ar.src: ar \in ars}
+        /\ CurrentStableRoster.responders \subseteq {ar.src: ar \in ars}
 
     reqsMade == {e.cmd: e \in {e \in Range(observed): e.type = "Req"}}
     
@@ -304,9 +318,9 @@ macro Send(set) begin
 end macro;
 
 \* Expire existing lease grant from f, and make a new repeatedly refreshed
-\* lease grant to new config cfg.
-macro Lease(f, cfg) begin
-    grants := {g \in grants: g.from # f} \cup {LeaseGrant(f, cfg)};
+\* lease grant to new roster ros.
+macro Lease(f, ros) begin
+    grants := {g \in grants: g.from # f} \cup {LeaseGrant(f, ros)};
 end macro;
 
 \* Observe client events helper.
@@ -320,13 +334,13 @@ macro Resolve(c) begin
 end macro;
 
 \* Someone steps up as leader and sends Prepare message to followers.
-\* To simplify this spec W.L.O.G., we change the responders config only when
+\* To simplify this spec W.L.O.G., we change the responders roster only when
 \* a new leader steps up; in practice, a separate and independent type of
-\* trigger will be used to change the config.
+\* trigger will be used to change the roster.
 macro BecomeLeader(r) begin
     \* if I'm not a current leader
     await node[r].leader # r;
-    \* pick a greater ballot number and a config
+    \* pick a greater ballot and an arbitrary set of responders for new roster
     with b \in Ballots,
          resps \in SUBSET {f \in Replicas: f # r},
     do
@@ -339,6 +353,7 @@ macro BecomeLeader(r) begin
         node[r].commitPrev := NumWrites + 1 ||
         node[r].balPrepared := 0 ||
         node[r].balMaxKnown := b ||
+        node[r].rosMaxKnown := Roster(b, r, resps) ||
         node[r].insts :=
             [s \in Slots |->
                 [node[r].insts[s]
@@ -348,8 +363,14 @@ macro BecomeLeader(r) begin
         \* broadcast Prepare and reply to myself instantly
         Send({PrepareMsg(r, b),
               PrepareReplyMsg(r, b, VotesByNode(node[r]))});
-        \* expire my old lease grant if any and grant to myself
-        Lease(r, Config(b, r, resps));
+        \* expire my old lease grants if any and grant to new roster
+        \* Note: this is implemented here as an await, meaning it needs
+        \* grants to evolve in this particular way, which happens when
+        \* node r LearnsNewRoster in RosterLeases.tla. In actual code
+        \* this would be an in-place call of GrantorRevokeLeases followed
+        \* by GrantorInitiatedLeases
+        await \A g \in grants:
+                (g.from = r /\ g.roster.bal = b) => g.roster = Roster(b, r, resps);
     end with;
 end macro;
 
@@ -358,23 +379,34 @@ macro HandlePrepare(r) begin
     \* if receiving a Prepare message with larger ballot than ever seen
     with m \in msgs do
         await /\ m.type = "Prepare"
-              /\ m.bal > node[r].balMaxKnown;
-        \* update states and reset statuses
-        node[r].leader := m.src ||
-        node[r].commitPrev := NumWrites + 1 ||
-        node[r].balMaxKnown := m.bal ||
-        node[r].insts :=
-            [s \in Slots |->
-                [node[r].insts[s]
-                    EXCEPT !.status = IF @ = "Accepting"
-                                        THEN "Preparing"
-                                        ELSE @]];
-        \* send back PrepareReply with my voted list
-        Send({PrepareReplyMsg(r, m.bal, VotesByNode(node[r]))});
-        \* expire my old lease grant if any and grant to new leader
-        \* remember that we simplify this spec by merging responders
-        \* config change into leader change Prepares
-        Lease(r, (CHOOSE g \in grants: g.from = m.src).config);
+              /\ m.bal > node[r].balMaxKnown
+              \* Prepare arrives with new lease grant; saves use from explicitly
+              \* modeling heartbeats in the consensus layer spec
+              /\ \E sg \in grants: sg.from = m.src /\ sg.roster.bal = m.bal;
+        with ros = (CHOOSE sg \in grants:
+                    sg.from = m.src /\ sg.roster.bal = m.bal).roster do
+            \* update states and reset statuses
+            node[r].leader := m.src ||
+            node[r].commitPrev := NumWrites + 1 ||
+            node[r].balMaxKnown := m.bal ||
+            node[r].rosMaxKnown := ros ||
+            node[r].insts :=
+                [s \in Slots |->
+                    [node[r].insts[s]
+                        EXCEPT !.status = IF @ = "Accepting"
+                                            THEN "Preparing"
+                                            ELSE @]];
+            \* send back PrepareReply with my voted list
+            Send({PrepareReplyMsg(r, m.bal, VotesByNode(node[r]))});
+            \* expire my old lease grants if any and grant to new roster
+            \* Note: this is implemented here as an await, meaning it needs
+            \* grants to evolve in this particular way, which happens when
+            \* node r LearnsNewRoster in RosterLeases.tla. In actual code
+            \* this would be an in-place call of GrantorRevokeLeases followed
+            \* by GrantorInitiatedLeases
+            await \A g \in grants:
+                    (g.from = r /\ g.roster.bal = m.bal) => g.roster = ros;
+        end with;
     end with;
 end macro;
 
@@ -394,13 +426,18 @@ macro HandlePrepareReplies(r) begin
         node[r].balPrepared := node[r].balMaxKnown ||
         node[r].insts :=
             [s \in Slots |->
-                [node[r].insts[s]
-                    EXCEPT !.status = IF \/ @ = "Preparing"
-                                         \/ /\ @ = "Empty"
-                                            /\ PeakVotedWrite(prs, s) # "nil"
-                                        THEN "Accepting"
-                                        ELSE @,
-                           !.write  = PeakVotedWrite(prs, s)]] ||
+                LET adopted == \/ node[r].insts[s].status = "Preparing"
+                               \/ /\ node[r].insts[s].status = "Empty"
+                                  /\ PeakVotedWrite(prs, s) # "nil"
+                IN  [node[r].insts[s]
+                        EXCEPT !.status = IF adopted
+                                            THEN "Accepting"
+                                            ELSE @,
+                               !.write  = PeakVotedWrite(prs, s),
+                               !.voted  = IF adopted
+                                            THEN [bal |-> node[r].balMaxKnown,
+                                                  write |-> PeakVotedWrite(prs, s)]
+                                            ELSE @]] ||
         node[r].commitPrev := LastTouchedSlot(prs);
         \* send Accept messages for in-progress instances and reply to myself
         \* instantly; send PrepareNotices as well
@@ -463,16 +500,32 @@ macro HandleAccept(r) begin
     with m \in msgs do
         await /\ m.type = "Accept"
               /\ m.bal >= node[r].balMaxKnown
-              /\ m.bal >= node[r].insts[m.slot].voted.bal;
-        \* update node states and corresponding instance's states
-        node[r].leader := m.src ||
-        node[r].balMaxKnown := m.bal ||
-        node[r].insts[m.slot].status := "Accepting" ||
-        node[r].insts[m.slot].write := m.write ||
-        node[r].insts[m.slot].voted.bal := m.bal ||
-        node[r].insts[m.slot].voted.write := m.write;
-        \* send back AcceptReply
-        Send({AcceptReplyMsg(r, m.bal, m.slot)});
+              /\ m.bal >= node[r].insts[m.slot].voted.bal
+              \* Accept arrives with new lease grant; saves use from explicitly
+              \* modeling heartbeats in the consensus layer spec
+              /\ \E sg \in grants: sg.from = m.src /\ sg.roster.bal = m.bal;
+        with ros = (CHOOSE sg \in grants:
+                    sg.from = m.src /\ sg.roster.bal = m.bal).roster do
+            \* update node states and corresponding instance's states
+            node[r].leader := m.src ||
+            node[r].balMaxKnown := m.bal ||
+            node[r].rosMaxKnown := ros ||
+            node[r].insts[m.slot].status := "Accepting" ||
+            node[r].insts[m.slot].write := m.write ||
+            node[r].insts[m.slot].voted.bal := m.bal ||
+            node[r].insts[m.slot].voted.write := m.write;
+            \* send back AcceptReply
+            Send({AcceptReplyMsg(r, m.bal, m.slot)});
+            \* in case known leader changed, expire my old lease grant if any
+            \* and grant to the new roster
+            \* Note: this is implemented here as an await, meaning it needs
+            \* grants to evolve in this particular way, which happens when
+            \* node r LearnsNewRoster in RosterLeases.tla. In actual code
+            \* this would be an in-place call of GrantorRevokeLeases followed
+            \* by GrantorInitiatedLeases
+            await \A g \in grants:
+                    (g.from = r /\ g.roster.bal = m.bal) => g.roster = ros;
+        end with;
     end with;
 end macro;
 
@@ -537,7 +590,7 @@ macro TakeNewReadRequest(r) begin
     \* if I'm a caught-up leader or responder follower
     await /\ \/ ThinkAmLeader(r)
              \/ ThinkAmResponder(r)
-          /\ BallotTransfered(r)
+          /\ BallotTransferred(r)
           /\ Len(UnseenPending(r)) > 0
           /\ Head(UnseenPending(r)) \in Reads;
     \* pick a pending request; examine my log and find the last non-empty
@@ -613,38 +666,40 @@ end algorithm; *)
 
 ----------
 
-\* BEGIN TRANSLATION (chksum(pcal) = "a012b034" /\ chksum(tla) = "f9b3b520")
+\* BEGIN TRANSLATION (chksum(pcal) = "4616d7fe" /\ chksum(tla) = "adb96da3")
 VARIABLES pc, msgs, grants, node, pending, observed, crashed
 
 (* define statement *)
-CurrentConfig ==
+AtMostOneGrantPerNodeIn(gs) ==
+    \A f \in Replicas, b \in Ballots:
+        Cardinality({g \in gs: g.from = f /\ g.roster.bal = b}) =< 1
+
+CurrentStableRoster ==
     LET leased(b) == Cardinality({g \in grants:
-                                  g.config.bal = b}) >= MajorityNum
+                                  g.roster.bal = b}) >= MajorityNum
     IN  IF ~\E b \in Ballots: leased(b)
-            THEN Config(0, "none", 0)
-            ELSE (CHOOSE g \in grants: leased(g.config.bal)).config
-
-
+            THEN NullRoster
+            ELSE (CHOOSE g \in grants: leased(g.roster.bal)).roster
 
 ThinkAmLeader(r) == /\ node[r].leader = r
                     /\ node[r].balPrepared = node[r].balMaxKnown
-                    /\ CurrentConfig.bal > 0
-                    /\ CurrentConfig.bal = node[r].balMaxKnown
-                    /\ CurrentConfig.leader = r
+                    /\ CurrentStableRoster.bal > 0
+                    /\ CurrentStableRoster.bal = node[r].balMaxKnown
+                    /\ CurrentStableRoster.leader = r
 
 ThinkAmFollower(r) == /\ node[r].leader # r
-                      /\ CurrentConfig.bal > 0
-                      /\ CurrentConfig.bal = node[r].balMaxKnown
-                      /\ CurrentConfig.leader # r
+                      /\ CurrentStableRoster.bal > 0
+                      /\ CurrentStableRoster.bal = node[r].balMaxKnown
+                      /\ CurrentStableRoster.leader # r
 
 ThinkAmResponder(r) == /\ ThinkAmFollower(r)
-                       /\ r \in CurrentConfig.responders
+                       /\ r \in CurrentStableRoster.responders
 
-BallotTransfered(r) == node[r].commitUpTo >= node[r].commitPrev
+BallotTransferred(r) == node[r].commitUpTo >= node[r].commitPrev
 
 WriteCommittable(ars) ==
     /\ Cardinality({ar.src: ar \in ars}) >= MajorityNum
-    /\ CurrentConfig.responders \subseteq {ar.src: ar \in ars}
+    /\ CurrentStableRoster.responders \subseteq {ar.src: ar \in ars}
 
 reqsMade == {e.cmd: e \in {e \in Range(observed): e.type = "Req"}}
 
@@ -694,6 +749,7 @@ rloop(self) == /\ pc[self] = "rloop"
                                                                ![self].commitPrev = NumWrites + 1,
                                                                ![self].balPrepared = 0,
                                                                ![self].balMaxKnown = b,
+                                                               ![self].rosMaxKnown = Roster(b, self, resps),
                                                                ![self].insts = [s \in Slots |->
                                                                                    [node[self].insts[s]
                                                                                        EXCEPT !.status = IF @ = "Accepting"
@@ -701,21 +757,29 @@ rloop(self) == /\ pc[self] = "rloop"
                                                                                                            ELSE @]]]
                                        /\ msgs' = (msgs \cup ({PrepareMsg(self, b),
                                                                PrepareReplyMsg(self, b, VotesByNode(node'[self]))}))
-                                       /\ grants' = ({g \in grants: g.from # self} \cup {LeaseGrant(self, (Config(b, self, resps)))})
+                                       /\ \A g \in grants:
+                                            (g.from = self /\ g.roster.bal = b) => g.roster = Roster(b, self, resps)
                                 /\ UNCHANGED <<pending, observed, crashed>>
                              \/ /\ \E m \in msgs:
                                      /\ /\ m.type = "Prepare"
                                         /\ m.bal > node[self].balMaxKnown
-                                     /\ node' = [node EXCEPT ![self].leader = m.src,
-                                                             ![self].commitPrev = NumWrites + 1,
-                                                             ![self].balMaxKnown = m.bal,
-                                                             ![self].insts = [s \in Slots |->
-                                                                                 [node[self].insts[s]
-                                                                                     EXCEPT !.status = IF @ = "Accepting"
-                                                                                                         THEN "Preparing"
-                                                                                                         ELSE @]]]
-                                     /\ msgs' = (msgs \cup ({PrepareReplyMsg(self, m.bal, VotesByNode(node'[self]))}))
-                                     /\ grants' = ({g \in grants: g.from # self} \cup {LeaseGrant(self, ((CHOOSE g \in grants: g.from = m.src).config))})
+                                        
+                                        
+                                        /\ \E sg \in grants: sg.from = m.src /\ sg.roster.bal = m.bal
+                                     /\ LET ros == (CHOOSE sg \in grants:
+                                                    sg.from = m.src /\ sg.roster.bal = m.bal).roster IN
+                                          /\ node' = [node EXCEPT ![self].leader = m.src,
+                                                                  ![self].commitPrev = NumWrites + 1,
+                                                                  ![self].balMaxKnown = m.bal,
+                                                                  ![self].rosMaxKnown = ros,
+                                                                  ![self].insts = [s \in Slots |->
+                                                                                      [node[self].insts[s]
+                                                                                          EXCEPT !.status = IF @ = "Accepting"
+                                                                                                              THEN "Preparing"
+                                                                                                              ELSE @]]]
+                                          /\ msgs' = (msgs \cup ({PrepareReplyMsg(self, m.bal, VotesByNode(node'[self]))}))
+                                          /\ \A g \in grants:
+                                               (g.from = self /\ g.roster.bal = m.bal) => g.roster = ros
                                 /\ UNCHANGED <<pending, observed, crashed>>
                              \/ /\ /\ node[self].leader = self
                                    /\ node[self].balPrepared = 0
@@ -724,27 +788,32 @@ rloop(self) == /\ pc[self] = "rloop"
                                      /\ Cardinality({pr.src: pr \in prs}) >= MajorityNum
                                      /\ node' = [node EXCEPT ![self].balPrepared = node[self].balMaxKnown,
                                                              ![self].insts = [s \in Slots |->
-                                                                                 [node[self].insts[s]
-                                                                                     EXCEPT !.status = IF \/ @ = "Preparing"
-                                                                                                          \/ /\ @ = "Empty"
-                                                                                                             /\ PeakVotedWrite(prs, s) # "nil"
-                                                                                                         THEN "Accepting"
-                                                                                                         ELSE @,
-                                                                                            !.write  = PeakVotedWrite(prs, s)]],
+                                                                                 LET adopted == \/ node[self].insts[s].status = "Preparing"
+                                                                                                \/ /\ node[self].insts[s].status = "Empty"
+                                                                                                   /\ PeakVotedWrite(prs, s) # "nil"
+                                                                                 IN  [node[self].insts[s]
+                                                                                         EXCEPT !.status = IF adopted
+                                                                                                             THEN "Accepting"
+                                                                                                             ELSE @,
+                                                                                                !.write  = PeakVotedWrite(prs, s),
+                                                                                                !.voted  = IF adopted
+                                                                                                             THEN [bal |-> node[self].balMaxKnown,
+                                                                                                                   write |-> PeakVotedWrite(prs, s)]
+                                                                                                             ELSE @]],
                                                              ![self].commitPrev = LastTouchedSlot(prs)]
                                      /\ msgs' = (msgs \cup (     UNION
                                                                  {{AcceptMsg(self, node'[self].balPrepared, s, node'[self].insts[s].write),
                                                                    AcceptReplyMsg(self, node'[self].balPrepared, s)}:
                                                                   s \in {s \in Slots: node'[self].insts[s].status = "Accepting"}}
                                                  \cup {PrepareNoticeMsg(self, node'[self].balPrepared, LastTouchedSlot(prs))}))
-                                /\ UNCHANGED <<grants, pending, observed, crashed>>
+                                /\ UNCHANGED <<pending, observed, crashed>>
                              \/ /\ /\ ThinkAmFollower(self)
                                    /\ node[self].commitPrev = NumWrites + 1
                                 /\ \E m \in msgs:
                                      /\ /\ m.type = "PrepareNotice"
                                         /\ m.bal = node[self].balMaxKnown
                                      /\ node' = [node EXCEPT ![self].commitPrev = m.commit_prev]
-                                /\ UNCHANGED <<msgs, grants, pending, observed, crashed>>
+                                /\ UNCHANGED <<msgs, pending, observed, crashed>>
                              \/ /\ /\ ThinkAmLeader(self)
                                    /\ \E s \in Slots: node[self].insts[s].status = "Empty"
                                    /\ Len(UnseenPending(self)) > 0
@@ -758,20 +827,28 @@ rloop(self) == /\ pc[self] = "rloop"
                                        /\ msgs' = (msgs \cup ({AcceptMsg(self, node'[self].balPrepared, s, c),
                                                                AcceptReplyMsg(self, node'[self].balPrepared, s)}))
                                        /\ observed' = AppendObserved((<<ReqEvent(c)>>))
-                                /\ UNCHANGED <<grants, pending, crashed>>
+                                /\ UNCHANGED <<pending, crashed>>
                              \/ /\ ThinkAmFollower(self)
                                 /\ \E m \in msgs:
                                      /\ /\ m.type = "Accept"
                                         /\ m.bal >= node[self].balMaxKnown
                                         /\ m.bal >= node[self].insts[m.slot].voted.bal
-                                     /\ node' = [node EXCEPT ![self].leader = m.src,
-                                                             ![self].balMaxKnown = m.bal,
-                                                             ![self].insts[m.slot].status = "Accepting",
-                                                             ![self].insts[m.slot].write = m.write,
-                                                             ![self].insts[m.slot].voted.bal = m.bal,
-                                                             ![self].insts[m.slot].voted.write = m.write]
-                                     /\ msgs' = (msgs \cup ({AcceptReplyMsg(self, m.bal, m.slot)}))
-                                /\ UNCHANGED <<grants, pending, observed, crashed>>
+                                        
+                                        
+                                        /\ \E sg \in grants: sg.from = m.src /\ sg.roster.bal = m.bal
+                                     /\ LET ros == (CHOOSE sg \in grants:
+                                                    sg.from = m.src /\ sg.roster.bal = m.bal).roster IN
+                                          /\ node' = [node EXCEPT ![self].leader = m.src,
+                                                                  ![self].balMaxKnown = m.bal,
+                                                                  ![self].rosMaxKnown = ros,
+                                                                  ![self].insts[m.slot].status = "Accepting",
+                                                                  ![self].insts[m.slot].write = m.write,
+                                                                  ![self].insts[m.slot].voted.bal = m.bal,
+                                                                  ![self].insts[m.slot].voted.write = m.write]
+                                          /\ msgs' = (msgs \cup ({AcceptReplyMsg(self, m.bal, m.slot)}))
+                                          /\ \A g \in grants:
+                                               (g.from = self /\ g.roster.bal = m.bal) => g.roster = ros
+                                /\ UNCHANGED <<pending, observed, crashed>>
                              \/ /\ /\ ThinkAmLeader(self)
                                    /\ node[self].commitUpTo < NumWrites
                                    /\ node[self].insts[node[self].commitUpTo+1].status = "Accepting"
@@ -788,7 +865,7 @@ rloop(self) == /\ pc[self] = "rloop"
                                              /\ observed' = AppendObserved((<<AckEvent(c, v, self)>>))
                                              /\ pending' = RemovePending(c)
                                              /\ msgs' = (msgs \cup ({CommitNoticeMsg(s)}))
-                                /\ UNCHANGED <<grants, crashed>>
+                                /\ UNCHANGED crashed
                              \/ /\ /\ ThinkAmFollower(self)
                                    /\ node[self].commitUpTo < NumWrites
                                    /\ node[self].insts[node[self].commitUpTo+1].status = "Accepting"
@@ -799,10 +876,10 @@ rloop(self) == /\ pc[self] = "rloop"
                                             /\ m.upto = s
                                          /\ node' = [node EXCEPT ![self].insts[s].status = "Committed",
                                                                  ![self].commitUpTo = s]
-                                /\ UNCHANGED <<msgs, grants, pending, observed, crashed>>
+                                /\ UNCHANGED <<msgs, pending, observed, crashed>>
                              \/ /\ /\ \/ ThinkAmLeader(self)
                                       \/ ThinkAmResponder(self)
-                                   /\ BallotTransfered(self)
+                                   /\ BallotTransferred(self)
                                    /\ Len(UnseenPending(self)) > 0
                                    /\ Head(UnseenPending(self)) \in Reads
                                 /\ LET s == LastNonEmptySlot(node[self].insts) IN
@@ -816,7 +893,7 @@ rloop(self) == /\ pc[self] = "rloop"
                                                IN  WriteCommittable(ars)
                                          /\ observed' = AppendObserved((<<ReqEvent(c), AckEvent(c, v, self)>>))
                                          /\ pending' = RemovePending(c)
-                                /\ UNCHANGED <<msgs, grants, node, crashed>>
+                                /\ UNCHANGED <<msgs, node, crashed>>
                              \/ /\ IF NodeFailuresOn
                                       THEN /\ /\ MajorityNum + numCrashed < Cardinality(Replicas)
                                               /\ ~crashed[self]
@@ -824,11 +901,12 @@ rloop(self) == /\ pc[self] = "rloop"
                                            /\ crashed' = [crashed EXCEPT ![self] = TRUE]
                                       ELSE /\ TRUE
                                            /\ UNCHANGED crashed
-                                /\ UNCHANGED <<msgs, grants, node, pending, observed>>
+                                /\ UNCHANGED <<msgs, node, pending, observed>>
                           /\ pc' = [pc EXCEPT ![self] = "rloop"]
                      ELSE /\ pc' = [pc EXCEPT ![self] = "Done"]
-                          /\ UNCHANGED << msgs, grants, node, pending, 
-                                          observed, crashed >>
+                          /\ UNCHANGED << msgs, node, pending, observed, 
+                                          crashed >>
+               /\ UNCHANGED grants
 
 Replica(self) == rloop(self)
 
@@ -844,5 +922,24 @@ Spec == Init /\ [][Next]_vars
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
 \* END TRANSLATION
+
+----------
+
+(************************************************************************)
+(* Grants free evolution action, layered on top of the translated spec. *)
+(************************************************************************)
+varsExceptGrants == <<msgs, node, pending, observed, crashed, pc>>
+
+LeaseGrantsEvolve ==
+    /\ \E new_grants \in SUBSET LeaseGrants:
+         /\ AtMostOneGrantPerNodeIn(new_grants)
+         /\ grants' = new_grants
+    /\ UNCHANGED varsExceptGrants
+
+AbstractNext == \/ (\E self \in Replicas: Replica(self))
+                \/ LeaseGrantsEvolve
+                \/ Terminating
+
+AbstractSpec == Init /\ [][AbstractNext]_vars
 
 ====

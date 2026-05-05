@@ -1,7 +1,7 @@
 #! /bin/bash
 
 
-if [ $(id -u) -eq 0 ];
+if [ "$(id -u)" -eq 0 ];
 then
     echo "Please run this script as normal user!"
     exit 1
@@ -17,4 +17,4 @@ sudo apt -y install liblog4j2-java
 echo
 echo "Fetching tla2tools.jar..."
 cd ..
-curl -O --location https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+curl -O --location https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar

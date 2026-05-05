@@ -1,5 +1,5 @@
----- MODULE Bodega_MC ----
-EXTENDS Bodega
+---- MODULE MultiPaxos_MC ----
+EXTENDS MultiPaxos
 
 (****************************)
 (* TLC config-related defs. *)
@@ -40,15 +40,18 @@ THEOREM AbstractSpec => []TypeOK
 (**************************************)
 AtMostOneGrantPerNode == AtMostOneGrantPerNodeIn(grants)
 
-AtMostOneStableRoster ==
-    \A ros1, ros2 \in Rosters:
-        (/\ Cardinality({g \in grants: g.roster = ros1}) >= MajorityNum
-         /\ Cardinality({g \in grants: g.roster = ros2}) >= MajorityNum
-         /\ ros1.bal = ros2.bal)
-        => (ros1 = ros2)
+AtMostOneStableLeader ==
+    \A p1, p2 \in Replicas:
+        (/\ Cardinality({g \in grants:
+                            /\ g.to = p1
+                            /\ g.bal = node[p1].balMaxKnown}) >= MajorityNum
+         /\ Cardinality({g \in grants:
+                            /\ g.to = p2
+                            /\ g.bal = node[p2].balMaxKnown}) >= MajorityNum)
+        => (p1 = p2)
 
 THEOREM AbstractSpec => /\ []AtMostOneGrantPerNode
-                        /\ []AtMostOneStableRoster
+                        /\ []AtMostOneStableLeader
 
 ----------
 
@@ -84,7 +87,7 @@ ObeysRealTime(order) ==
             => (OrderIdxOfCmd(order, c1) < OrderIdxOfCmd(order, c2))
 
 Linearizability ==
-    terminated => 
+    terminated =>
         \E order \in [1..NumCommands -> Commands]:
             /\ IsLinearOrder(order)
             /\ ObeysRealTime(order)
