@@ -105,20 +105,20 @@ impl QuorumLeasesReplica {
                                         )
                                         .await?;
                                 }
-                                ApiRequest::Conf { delta, .. } => {
+                                ApiRequest::Conf { delta, .. }
                                     if Self::is_valid_delta(
                                         &delta,
                                         self.population,
-                                    ) {
-                                        Self::apply_conf_delta(
-                                            delta,
-                                            &mut self.qlease_conf,
-                                        )?;
-                                        self.qlease_ver =
-                                            self.commit_bar as ConfNum;
-                                        self.qlease_num =
-                                            self.commit_bar as LeaseNum;
-                                    }
+                                    ) =>
+                                {
+                                    Self::apply_conf_delta(
+                                        delta,
+                                        &mut self.qlease_conf,
+                                    )?;
+                                    self.qlease_ver =
+                                        self.commit_bar as ConfNum;
+                                    self.qlease_num =
+                                        self.commit_bar as LeaseNum;
                                 }
                                 _ => {} // ignore other request types
                             }

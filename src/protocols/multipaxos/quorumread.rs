@@ -271,7 +271,7 @@ impl MultiPaxosReplica {
         if can_reply {
             let rq_bk = self.quorum_reads.remove(&rq_id).unwrap();
             for ((client, req), reply) in
-                rq_bk.reads.into_iter().zip(rq_bk.max_replies.into_iter())
+                rq_bk.reads.into_iter().zip(rq_bk.max_replies)
             {
                 if let ApiRequest::Req {
                     id: req_id,
