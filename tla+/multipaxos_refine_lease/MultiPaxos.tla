@@ -226,12 +226,10 @@ LeaseGrants == [from: Replicas, to: Replicas, bal: Ballots]
 LeaseGrant(f, t, b) == [from |-> f, to |-> t, bal |-> b]
                         \* the `grants` bag is a variable that evolves
                         \* freely via LeaseGrantsEvolve action, subject
-                        \* only to AtMostOneGrantPerNode. The separate
-                        \* lease protocol (LeaseProtocol.tla) asserts
-                        \* this is always honored, and is also checked
-                        \* through refinement (MultiPaxosRefine.tla)
-                        \* that replaces LeaseGrantsEvolve with real
-                        \* lease protocol transitions
+                        \* only to AtMostOneGrantPerNode.
+                        \* The refinement (MultiPaxosRefine.tla) binds
+                        \* LeaseGrantsEvolve to real lease protocol
+                        \* transitions and checks it always holds
 
 ----------
 

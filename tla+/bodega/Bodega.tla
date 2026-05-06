@@ -191,8 +191,11 @@ PrepareNoticeMsgs == [type: {"PrepareNotice"}, src: Replicas,
 PrepareNoticeMsg(r, b, cp) == [type |-> "PrepareNotice", src |-> r,
                                                          bal |-> b,
                                                          commit_prev |-> cp]
-                                    \* this messasge is added to allow
-                                    \* followers to learn about commitPrev
+                                \* this messasge is added to allow followers
+                                \* to learn about commitPrev, serving the job
+                                \* of broadcasting the safety threshold slot
+                                \* index carried in Guard heartbeat messages
+                                \* as described in paper
 
 AcceptMsgs == [type: {"Accept"}, src: Replicas,
                                  bal: Ballots,
@@ -232,12 +235,10 @@ LeaseGrants == [from: Replicas, roster: Rosters]
 LeaseGrant(f, ros) == [from |-> f, roster |-> ros]
                         \* the `grants` bag is a variable that evolves
                         \* freely via LeaseGrantsEvolve action, subject
-                        \* only to AtMostOneGrantPerNode. The separate
-                        \* roster leases protocol (RosterLeases.tla)
-                        \* asserts this is always honored, and is also
-                        \* checked via refinement (MultiPaxosRefine.tla)
-                        \* that replaces LeaseGrantsEvolve with real
-                        \* lease protocol transitions
+                        \* only to AtMostOneGrantPerNode.
+                        \* The refinement (BodegasRefine.tla) binds
+                        \* LeaseGrantsEvolve to real lease protocol
+                        \* transitions and checks these always hold
 
 ----------
 
@@ -261,13 +262,16 @@ define
         \A f \in Replicas, b \in Ballots:
             Cardinality({g \in gs: g.from = f /\ g.roster.bal = b}) =< 1
 
+    \* define current stable roster based on the abstract bag of lease grants
     CurrentStableRoster ==
-        LET leased(b) == Cardinality({g \in grants:
-                                      g.roster.bal = b}) >= MajorityNum
-        IN  IF ~\E b \in Ballots: leased(b)
+        LET Stable(b) ==
+                /\ Cardinality({g \in grants: g.roster.bal = b}) >= MajorityNum
+                /\ \A g \in grants: g.roster.bal =< b
+        IN  IF ~\E b \in Ballots: Stable(b)
                 THEN NullRoster
-                ELSE (CHOOSE g \in grants: leased(g.roster.bal)).roster
+                ELSE (CHOOSE g \in grants: Stable(g.roster.bal)).roster
 
+    \* helper methods for consensus
     ThinkAmLeader(r) == /\ node[r].leader = r
                         /\ node[r].balPrepared = node[r].balMaxKnown
                         /\ CurrentStableRoster.bal > 0
@@ -317,12 +321,6 @@ macro Send(set) begin
     msgs := msgs \cup set;
 end macro;
 
-\* Expire existing lease grant from f, and make a new repeatedly refreshed
-\* lease grant to new roster ros.
-macro Lease(f, ros) begin
-    grants := {g \in grants: g.from # f} \cup {LeaseGrant(f, ros)};
-end macro;
-
 \* Observe client events helper.
 macro Observe(seq) begin
     observed := AppendObserved(seq);
@@ -368,7 +366,7 @@ macro BecomeLeader(r) begin
         \* grants to evolve in this particular way, which happens when
         \* node r LearnsNewRoster in RosterLeases.tla. In actual code
         \* this would be an in-place call of GrantorRevokeLeases followed
-        \* by GrantorInitiatedLeases
+        \* by GrantorInitiateLeases
         await \A g \in grants:
                 (g.from = r /\ g.roster.bal = b) => g.roster = Roster(b, r, resps);
     end with;
@@ -403,7 +401,7 @@ macro HandlePrepare(r) begin
             \* grants to evolve in this particular way, which happens when
             \* node r LearnsNewRoster in RosterLeases.tla. In actual code
             \* this would be an in-place call of GrantorRevokeLeases followed
-            \* by GrantorInitiatedLeases
+            \* by GrantorInitiateLeases
             await \A g \in grants:
                     (g.from = r /\ g.roster.bal = m.bal) => g.roster = ros;
         end with;
@@ -522,7 +520,7 @@ macro HandleAccept(r) begin
             \* grants to evolve in this particular way, which happens when
             \* node r LearnsNewRoster in RosterLeases.tla. In actual code
             \* this would be an in-place call of GrantorRevokeLeases followed
-            \* by GrantorInitiatedLeases
+            \* by GrantorInitiateLeases
             await \A g \in grants:
                     (g.from = r /\ g.roster.bal = m.bal) => g.roster = ros;
         end with;
@@ -666,7 +664,7 @@ end algorithm; *)
 
 ----------
 
-\* BEGIN TRANSLATION (chksum(pcal) = "4616d7fe" /\ chksum(tla) = "adb96da3")
+\* BEGIN TRANSLATION (chksum(pcal) = "d74657df" /\ chksum(tla) = "445852ac")
 VARIABLES pc, msgs, grants, node, pending, observed, crashed
 
 (* define statement *)
@@ -674,12 +672,15 @@ AtMostOneGrantPerNodeIn(gs) ==
     \A f \in Replicas, b \in Ballots:
         Cardinality({g \in gs: g.from = f /\ g.roster.bal = b}) =< 1
 
+
 CurrentStableRoster ==
-    LET leased(b) == Cardinality({g \in grants:
-                                  g.roster.bal = b}) >= MajorityNum
-    IN  IF ~\E b \in Ballots: leased(b)
+    LET Stable(b) ==
+            /\ Cardinality({g \in grants: g.roster.bal = b}) >= MajorityNum
+            /\ \A g \in grants: g.roster.bal =< b
+    IN  IF ~\E b \in Ballots: Stable(b)
             THEN NullRoster
-            ELSE (CHOOSE g \in grants: leased(g.roster.bal)).roster
+            ELSE (CHOOSE g \in grants: Stable(g.roster.bal)).roster
+
 
 ThinkAmLeader(r) == /\ node[r].leader = r
                     /\ node[r].balPrepared = node[r].balMaxKnown
