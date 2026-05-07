@@ -20,3 +20,6 @@ clap = { workspace = true }
 color-print = { workspace = true }
 zookeeper-client = { workspace = true }
 etcd-client = { workspace = true }
+
+[lints]
+workspace = true

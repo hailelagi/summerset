@@ -47,12 +47,12 @@ pub struct ModeParamsMess {
 impl Default for ModeParamsMess {
     fn default() -> Self {
         ModeParamsMess {
-            pause: "".into(),
-            resume: "".into(),
+            pause: String::new(),
+            resume: String::new(),
             leader: "/".into(),
             key_range: "/".into(),
             responder: "/".into(),
-            write: "".into(),
+            write: String::new(),
         }
     }
 }
@@ -65,7 +65,7 @@ pub(crate) struct ClientMess {
     /// Mode parameters struct.
     params: ModeParamsMess,
 
-    /// Map from replica ID -> (addr, is_leader), queried from manager.
+    /// Map from replica ID -> (`addr`, `is_leader`), queried from manager.
     servers_info: Option<HashMap<ReplicaId, ServerInfo>>,
 }
 
@@ -88,6 +88,7 @@ impl ClientMess {
     }
 
     /// Parse string into optional server ID.
+    #[allow(clippy::unused_self)]
     fn parse_optional_server(
         &self,
         id_str: &str,
@@ -135,6 +136,7 @@ impl ClientMess {
     ///   - `Some(Some((ka, kb)))` if a specified range
     ///   - `Some(None)` if a full range
     ///   - `None` if a conf reset indicated
+    #[allow(clippy::unused_self, clippy::option_option)]
     fn parse_conf_key_range(
         &self,
         range_str: &str,
@@ -147,14 +149,14 @@ impl ClientMess {
                 for s in range_str.trim().split('-') {
                     range.push(s.to_string());
                 }
-                if range.len() != 2 {
-                    logged_err!("invalid key_range: {}", range_str)
-                } else {
+                if range.len() == 2 {
                     let mut range_drain = range.into_iter();
                     Ok(Some(Some((
                         range_drain.next().unwrap(),
                         range_drain.next().unwrap(),
                     ))))
+                } else {
+                    logged_err!("invalid key_range: {}", range_str)
                 }
             }
         }
@@ -162,6 +164,7 @@ impl ClientMess {
 
     /// Parse the `write` field for a single-shot write. Returns a key-value
     /// pair on success.
+    #[allow(clippy::unused_self)]
     fn parse_write_key_value(
         &self,
         write_str: &str,
@@ -205,9 +208,10 @@ impl ClientMess {
         self.driver.ctrl_stub().send_req_insist(&req)?;
 
         let reply = self.driver.ctrl_stub().recv_reply().await?;
-        match reply {
-            CtrlReply::PauseServers { .. } => Ok(()),
-            _ => logged_err!("unexpected control reply type"),
+        if let CtrlReply::PauseServers { .. } = reply {
+            Ok(())
+        } else {
+            logged_err!("unexpected control reply type")
         }
     }
 
@@ -220,9 +224,10 @@ impl ClientMess {
         self.driver.ctrl_stub().send_req_insist(&req)?;
 
         let reply = self.driver.ctrl_stub().recv_reply().await?;
-        match reply {
-            CtrlReply::ResumeServers { .. } => Ok(()),
-            _ => logged_err!("unexpected control reply type"),
+        if let CtrlReply::ResumeServers { .. } = reply {
+            Ok(())
+        } else {
+            logged_err!("unexpected control reply type")
         }
     }
 
@@ -239,11 +244,10 @@ impl ClientMess {
                 DriverReply::Conf { changed, .. } => {
                     if changed {
                         return Ok(());
-                    } else {
-                        return logged_err!(
-                            "responders conf change ignored (invalid?)"
-                        );
                     }
+                    return logged_err!(
+                        "responders conf change ignored (invalid?)"
+                    );
                 }
                 _ => {
                     return logged_err!("unexpected driver reply type");
@@ -268,7 +272,7 @@ impl ClientMess {
                     CommandResult::Put { .. } => {
                         return Ok(());
                     }
-                    _ => {
+                    CommandResult::Get { .. } => {
                         return logged_err!("unexpected command result type");
                     }
                 },

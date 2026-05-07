@@ -150,10 +150,10 @@ impl EtcdBench {
             None
         };
 
-        let trace_vec = if !params.ycsb_trace.is_empty() {
-            Some(ClientBench::load_trace_file(&params.ycsb_trace)?)
-        } else {
+        let trace_vec = if params.ycsb_trace.is_empty() {
             None
+        } else {
+            Some(ClientBench::load_trace_file(&params.ycsb_trace)?)
         };
 
         let value_size = ClientBench::parse_value_sizes(
@@ -181,6 +181,7 @@ impl EtcdBench {
 
     /// Pick a value of given size. If `using_dist` is on, uses that as mean
     /// size and goes through a normal distribution to sample a size.
+    #[allow(clippy::unnecessary_wraps)]
     fn gen_value_at_now(&mut self) -> Result<&'static str, SummersetError> {
         let curr_sec = self.now.duration_since(self.start).as_secs();
         let size = *self.value_size.get(&curr_sec).unwrap();

@@ -1,4 +1,4 @@
-//! etcd client implementation that translates Summerset Puts/Gets.
+//! `etcd` client implementation that translates Summerset Puts/Gets.
 
 use serde::Deserialize;
 

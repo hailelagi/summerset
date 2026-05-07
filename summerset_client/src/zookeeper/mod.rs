@@ -1,4 +1,4 @@
-//! ZooKeeper client implementation that translates Summerset Puts/Gets.
+//! `ZooKeeper` client implementation that translates Summerset Puts/Gets.
 
 use serde::Deserialize;
 

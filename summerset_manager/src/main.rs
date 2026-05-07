@@ -1,4 +1,10 @@
 //! Summerset cluster manager oracle.
+#![allow(
+    clippy::similar_names,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::uninlined_format_args
+)]
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;

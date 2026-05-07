@@ -100,12 +100,12 @@ pub struct ModeParamsBench {
 impl Default for ModeParamsBench {
     fn default() -> Self {
         ModeParamsBench {
-            output_path: "".into(),
+            output_path: String::new(),
             fine_output: false,
             freq_target: 0,
             length_s: 30,
             put_ratio: 50,
-            ycsb_trace: "".into(),
+            ycsb_trace: String::new(),
             value_size: "1024".into(),
             num_keys: 5,
             use_random_keys: false,
@@ -185,6 +185,7 @@ pub(crate) struct ClientBench {
 
 impl ClientBench {
     /// Creates a new benchmarking client.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn new(
         endpoint: Box<dyn GenericEndpoint>,
         timeout: Duration,
@@ -278,10 +279,10 @@ impl ClientBench {
             None
         };
 
-        let trace_vec = if !params.ycsb_trace.is_empty() {
-            Some(Self::load_trace_file(&params.ycsb_trace)?)
-        } else {
+        let trace_vec = if params.ycsb_trace.is_empty() {
             None
+        } else {
+            Some(Self::load_trace_file(&params.ycsb_trace)?)
         };
 
         let value_size =
@@ -454,6 +455,7 @@ impl ClientBench {
 
     /// Pick a value of given size. If `using_dist` is on, uses that as mean
     /// size and goes through a normal distribution to sample a size.
+    #[allow(clippy::unnecessary_wraps)]
     fn gen_value_at_now(&mut self) -> Result<&'static str, SummersetError> {
         let curr_sec = self.now.duration_since(self.start).as_secs();
         let mut size = *self.value_size.get(&curr_sec).unwrap();
@@ -676,20 +678,19 @@ impl ClientBench {
                 loop {
                     while self.driver.issue_put(key, val)?.is_none() {}
 
-                    match self.driver.wait_reply().await? {
-                        DriverReply::Success { .. } => {
-                            break;
-                        }
-                        _ => {
-                            retries -= 1;
-                            if retries == 0 {
-                                return logged_err!(
-                                    "unsuccessful preload reply, no retries left"
-                                );
-                            }
-                            time::sleep(Duration::from_millis(200)).await;
-                        }
+                    if let DriverReply::Success { .. } =
+                        self.driver.wait_reply().await?
+                    {
+                        break;
                     }
+
+                    retries -= 1;
+                    if retries == 0 {
+                        return logged_err!(
+                            "unsuccessful preload reply, no retries left"
+                        );
+                    }
+                    time::sleep(Duration::from_millis(200)).await;
                 }
             }
         }
@@ -711,6 +712,7 @@ impl ClientBench {
     }
 
     /// Runs the adaptive benchmark for given time length.
+    #[allow(clippy::too_many_lines)]
     pub(crate) async fn run(&mut self) -> Result<(), SummersetError> {
         self.driver.connect().await?;
 

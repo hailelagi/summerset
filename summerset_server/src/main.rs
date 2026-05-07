@@ -1,4 +1,10 @@
 //! Summerset server replica executable.
+#![allow(
+    clippy::similar_names,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::uninlined_format_args
+)]
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
@@ -196,7 +202,7 @@ mod arg_tests {
             p2p_port: 40203,
             manager: "127.0.0.1:40000".parse()?,
             threads: 2,
-            config: "".into(),
+            config: String::new(),
         };
         assert_eq!(args.sanitize(), Ok(SmrProtocol::RepNothing));
         Ok(())
@@ -211,7 +217,7 @@ mod arg_tests {
             p2p_port: 40200,
             manager: "127.0.0.1:40000".parse()?,
             threads: 2,
-            config: "".into(),
+            config: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())
@@ -226,7 +232,7 @@ mod arg_tests {
             p2p_port: 1023,
             manager: "127.0.0.1:40000".parse()?,
             threads: 2,
-            config: "".into(),
+            config: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())
@@ -241,7 +247,7 @@ mod arg_tests {
             p2p_port: 40100,
             manager: "127.0.0.1:40000".parse()?,
             threads: 2,
-            config: "".into(),
+            config: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())
@@ -256,7 +262,7 @@ mod arg_tests {
             p2p_port: 40200,
             manager: "127.0.0.1:40000".parse()?,
             threads: 2,
-            config: "".into(),
+            config: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())
@@ -271,7 +277,7 @@ mod arg_tests {
             p2p_port: 40200,
             manager: "127.0.0.1:40000".parse()?,
             threads: 1,
-            config: "".into(),
+            config: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())

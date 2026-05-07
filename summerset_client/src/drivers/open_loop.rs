@@ -183,23 +183,21 @@ impl DriverOpenLoop {
                         // logged_err!("request ID {} not in pending set",
                         //                      reply_id)
                         continue;
-                    } else {
-                        let issue_ts =
-                            self.pending_reqs.remove(&reply_id).unwrap();
-                        let latency = Instant::now().duration_since(issue_ts);
-
-                        if let Some(res) = cmd_result {
-                            return Ok(DriverReply::Success {
-                                req_id: reply_id,
-                                cmd_result: res,
-                                latency,
-                            });
-                        } else if let Some(server) = redirect {
-                            return Ok(DriverReply::Redirect { server });
-                        } else {
-                            return Ok(DriverReply::Failure);
-                        }
                     }
+
+                    let issue_ts = self.pending_reqs.remove(&reply_id).unwrap();
+                    let latency = Instant::now().duration_since(issue_ts);
+
+                    if let Some(res) = cmd_result {
+                        return Ok(DriverReply::Success {
+                            req_id: reply_id,
+                            cmd_result: res,
+                            latency,
+                        });
+                    } else if let Some(server) = redirect {
+                        return Ok(DriverReply::Redirect { server });
+                    }
+                    return Ok(DriverReply::Failure);
                 }
 
                 None => {

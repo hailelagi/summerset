@@ -114,33 +114,30 @@ impl DriverClosedLoop {
                         //             "request ID mismatch: expected {}, replied {}",
                         //             req_id, reply_id)
                         continue;
-                    } else {
-                        match cmd_result {
-                            None => {
-                                if let Some(server) = redirect {
-                                    return Ok(DriverReply::Redirect {
-                                        server,
-                                    });
-                                } else {
-                                    return Ok(DriverReply::Failure);
-                                }
-                            }
+                    }
 
-                            Some(CommandResult::Get { value }) => {
-                                let latency =
-                                    Instant::now().duration_since(issue_ts);
-                                return Ok(DriverReply::Success {
-                                    req_id,
-                                    cmd_result: CommandResult::Get { value },
-                                    latency,
-                                });
+                    match cmd_result {
+                        None => {
+                            if let Some(server) = redirect {
+                                return Ok(DriverReply::Redirect { server });
                             }
+                            return Ok(DriverReply::Failure);
+                        }
 
-                            _ => {
-                                return logged_err!(
-                                    "command type mismatch: expected Get"
-                                );
-                            }
+                        Some(CommandResult::Get { value }) => {
+                            let latency =
+                                Instant::now().duration_since(issue_ts);
+                            return Ok(DriverReply::Success {
+                                req_id,
+                                cmd_result: CommandResult::Get { value },
+                                latency,
+                            });
+                        }
+
+                        _ => {
+                            return logged_err!(
+                                "command type mismatch: expected Get"
+                            );
                         }
                     }
                 }
@@ -188,35 +185,30 @@ impl DriverClosedLoop {
                         //             "request ID mismatch: expected {}, replied {}",
                         //             req_id, reply_id)
                         continue;
-                    } else {
-                        match cmd_result {
-                            None => {
-                                if let Some(server) = redirect {
-                                    return Ok(DriverReply::Redirect {
-                                        server,
-                                    });
-                                } else {
-                                    return Ok(DriverReply::Failure);
-                                }
-                            }
+                    }
 
-                            Some(CommandResult::Put { old_value }) => {
-                                let latency =
-                                    Instant::now().duration_since(issue_ts);
-                                return Ok(DriverReply::Success {
-                                    req_id,
-                                    cmd_result: CommandResult::Put {
-                                        old_value,
-                                    },
-                                    latency,
-                                });
+                    match cmd_result {
+                        None => {
+                            if let Some(server) = redirect {
+                                return Ok(DriverReply::Redirect { server });
                             }
+                            return Ok(DriverReply::Failure);
+                        }
 
-                            _ => {
-                                return logged_err!(
-                                    "command type mismatch: expected Put"
-                                );
-                            }
+                        Some(CommandResult::Put { old_value }) => {
+                            let latency =
+                                Instant::now().duration_since(issue_ts);
+                            return Ok(DriverReply::Success {
+                                req_id,
+                                cmd_result: CommandResult::Put { old_value },
+                                latency,
+                            });
+                        }
+
+                        _ => {
+                            return logged_err!(
+                                "command type mismatch: expected Put"
+                            );
                         }
                     }
                 }
@@ -255,16 +247,14 @@ impl DriverClosedLoop {
                         //             "request ID mismatch: expected {}, replied {}",
                         //             req_id, reply_id)
                         continue;
-                    } else {
-                        if let Some(redirect) = redirect
-                            && reply_id == req_id
-                        {
-                            return Ok(DriverReply::Redirect {
-                                server: redirect,
-                            });
-                        }
-                        return Ok(DriverReply::Failure);
                     }
+
+                    if let Some(redirect) = redirect
+                        && reply_id == req_id
+                    {
+                        return Ok(DriverReply::Redirect { server: redirect });
+                    }
+                    return Ok(DriverReply::Failure);
                 }
 
                 Some(ApiReply::Conf {
@@ -276,12 +266,12 @@ impl DriverClosedLoop {
                         //             "request ID mismatch: expected {}, replied {}",
                         //             req_id, reply_id)
                         continue;
-                    } else {
-                        return Ok(DriverReply::Conf {
-                            req_id,
-                            changed: success,
-                        });
                     }
+
+                    return Ok(DriverReply::Conf {
+                        req_id,
+                        changed: success,
+                    });
                 }
 
                 None => {

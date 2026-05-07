@@ -103,13 +103,15 @@ impl ClientTester {
     }
 
     /// Returns whether an `Option<String>` matches an `Option<&str>`.
+    #[allow(clippy::ref_option, clippy::ref_option_ref)]
     fn strings_match(s: &Option<String>, expect: &Option<&str>) -> bool {
         s.as_deref() == *expect
     }
 
     /// Issues a Get request and checks its reply value against given one if
     /// not `None`. Retries in-place upon getting redirection error. Retries
-    /// at most max_timeouts times upon getting timeouts.
+    /// at most `max_timeouts` times upon getting timeouts.
+    #[allow(clippy::option_option)]
     async fn checked_get(
         &mut self,
         key: &str,
@@ -170,9 +172,10 @@ impl ClientTester {
         )
     }
 
-    /// Issues a Put request and checks its reply old_value against given one
+    /// Issues a Put request and checks its reply `old_value` against given one
     /// if not `None`. Retries in-place upon getting redirection error. Retries
-    /// at most max_timeouts times upon getting timeouts.
+    /// at most `max_timeouts` times upon getting timeouts.
+    #[allow(clippy::option_option)]
     async fn checked_put(
         &mut self,
         key: &str,
@@ -235,7 +238,7 @@ impl ClientTester {
     }
 
     /// Query the list of servers in the cluster. Returns a map from replica ID
-    /// -> is_leader status.
+    /// -> `is_leader` status.
     async fn query_servers(
         &mut self,
     ) -> Result<HashMap<ReplicaId, bool>, SummersetError> {
@@ -243,12 +246,13 @@ impl ClientTester {
         self.driver.ctrl_stub().send_req_insist(&req)?;
 
         let reply = self.driver.ctrl_stub().recv_reply().await?;
-        match reply {
-            CtrlReply::QueryInfo { servers_info, .. } => Ok(servers_info
+        if let CtrlReply::QueryInfo { servers_info, .. } = reply {
+            Ok(servers_info
                 .into_iter()
                 .map(|(id, info)| (id, info.is_leader))
-                .collect()),
-            _ => logged_err!("unexpected control reply type"),
+                .collect())
+        } else {
+            logged_err!("unexpected control reply type")
         }
     }
 
@@ -262,9 +266,10 @@ impl ClientTester {
         self.driver.ctrl_stub().send_req_insist(&req)?;
 
         let reply = self.driver.ctrl_stub().recv_reply().await?;
-        match reply {
-            CtrlReply::ResetServers { .. } => Ok(()),
-            _ => logged_err!("unexpected control reply type"),
+        if let CtrlReply::ResetServers { .. } = reply {
+            Ok(())
+        } else {
+            logged_err!("unexpected control reply type")
         }
     }
 
@@ -277,9 +282,10 @@ impl ClientTester {
         self.driver.ctrl_stub().send_req_insist(&req)?;
 
         let reply = self.driver.ctrl_stub().recv_reply().await?;
-        match reply {
-            CtrlReply::PauseServers { .. } => Ok(()),
-            _ => logged_err!("unexpected control reply type"),
+        if let CtrlReply::PauseServers { .. } = reply {
+            Ok(())
+        } else {
+            logged_err!("unexpected control reply type")
         }
     }
 
@@ -292,9 +298,10 @@ impl ClientTester {
         self.driver.ctrl_stub().send_req_insist(&req)?;
 
         let reply = self.driver.ctrl_stub().recv_reply().await?;
-        match reply {
-            CtrlReply::TakeSnapshot { .. } => Ok(()),
-            _ => logged_err!("unexpected control reply type"),
+        if let CtrlReply::TakeSnapshot { .. } = reply {
+            Ok(())
+        } else {
+            logged_err!("unexpected control reply type")
         }
     }
 
@@ -308,9 +315,10 @@ impl ClientTester {
         self.driver.ctrl_stub().send_req_insist(&req)?;
 
         let reply = self.driver.ctrl_stub().recv_reply().await?;
-        match reply {
-            CtrlReply::ResumeServers { .. } => Ok(()),
-            _ => logged_err!("unexpected control reply type"),
+        if let CtrlReply::ResumeServers { .. } = reply {
+            Ok(())
+        } else {
+            logged_err!("unexpected control reply type")
         }
     }
 

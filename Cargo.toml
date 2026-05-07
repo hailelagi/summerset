@@ -72,5 +72,8 @@ debug = "limited"
 name = "rse_bench"
 harness = false
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = "warn"
+
+[lints]
+workspace = true

@@ -1,4 +1,4 @@
-//! Core session client wrapper for ZooKeeper.
+//! Core session client wrapper for `ZooKeeper`.
 
 use std::net::SocketAddr;
 
@@ -12,7 +12,7 @@ use crate::zookeeper::ClientConfigZooKeeper;
 /// children Znodes.
 static PARENT_ZNODE: &str = "/summerset";
 
-/// ZooKeeper session client wrapper.
+/// `ZooKeeper` session client wrapper.
 pub(crate) struct ZooKeeperSession {
     /// User-passed server address to connect to.
     server_addr: SocketAddr,
@@ -20,7 +20,7 @@ pub(crate) struct ZooKeeperSession {
     /// Session client builder.
     builder: zkcli::Connector,
 
-    /// Current connected ZooKeeper session.
+    /// Current connected `ZooKeeper` session.
     session: Option<zkcli::Client>,
 
     /// Do a `sync` before every `get` for stricter consistency (though still
@@ -29,7 +29,7 @@ pub(crate) struct ZooKeeperSession {
 }
 
 impl ZooKeeperSession {
-    /// Create a new ZooKeeper session client.
+    /// Create a new `ZooKeeper` session client.
     pub(crate) fn new(
         server: SocketAddr,
         config_str: Option<&str>,
@@ -52,7 +52,7 @@ impl ZooKeeperSession {
         })
     }
 
-    /// Connect to given ZooKeeper server, get an active session.
+    /// Connect to given `ZooKeeper` server, get an active session.
     pub(crate) async fn connect(&mut self) -> Result<(), SummersetError> {
         let zk = self
             .builder
@@ -79,12 +79,12 @@ impl ZooKeeperSession {
         Ok(())
     }
 
-    /// Leave the current ZooKeeper session.
+    /// Leave the current `ZooKeeper` session.
     pub(crate) fn leave(&mut self) {
         self.session = None;
     }
 
-    /// Make a getData request to ZooKeeper.
+    /// Make a getData request to `ZooKeeper`.
     pub(crate) async fn get(
         &self,
         key: &str,
@@ -102,9 +102,8 @@ impl ZooKeeperSession {
             if let Err(zkcli::Error::NoNode) = sync_result {
                 // node does not exist
                 return Ok(None);
-            } else {
-                sync_result?;
             }
+            sync_result?;
         }
 
         let get_result = session.get_data(&path).await;
@@ -118,7 +117,7 @@ impl ZooKeeperSession {
         }
     }
 
-    /// Make a setData request to ZooKeeper.
+    /// Make a setData request to `ZooKeeper`.
     pub(crate) async fn set(
         &self,
         key: &str,

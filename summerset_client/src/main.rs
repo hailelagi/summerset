@@ -1,4 +1,14 @@
 //! Summerset client side executable.
+#![allow(
+    clippy::similar_names,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::uninlined_format_args,
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 
 use std::net::SocketAddr;
 use std::process::ExitCode;
@@ -30,7 +40,7 @@ enum SmrProtocolOrSystem {
 }
 
 impl SmrProtocolOrSystem {
-    /// Parse a string into SmrProtocolOrSystem enum.
+    /// Parse a string into `SmrProtocolOrSystem` enum.
     fn parse_name(name: &str) -> Option<Self> {
         SmrProtocol::parse_name(name)
             .map(SmrProtocolOrSystem::Protocol)
@@ -48,7 +58,7 @@ impl SmrProtocolOrSystem {
 struct CliArgs {
     /// Name of SMR protocol to use.
     /// Apart from Summerset-impl protocols, also partially supports these
-    /// special names as external systems: ZooKeeper.
+    /// special names as external systems: `ZooKeeper`, `etcd`.
     #[arg(short, long)]
     protocol: String,
 
@@ -258,8 +268,8 @@ mod arg_tests {
             manager: "127.0.0.1:40001".parse()?,
             threads: 2,
             timeout_ms: 5000,
-            config: "".into(),
-            params: "".into(),
+            config: String::new(),
+            params: String::new(),
         };
         assert_eq!(
             args.sanitize(),
@@ -279,8 +289,8 @@ mod arg_tests {
             manager: "127.0.0.1:40001".parse()?,
             threads: 2,
             timeout_ms: 5000,
-            config: "".into(),
-            params: "".into(),
+            config: String::new(),
+            params: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())
@@ -294,8 +304,8 @@ mod arg_tests {
             manager: "127.0.0.1:40001".parse()?,
             threads: 2,
             timeout_ms: 5000,
-            config: "".into(),
-            params: "".into(),
+            config: String::new(),
+            params: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())
@@ -309,8 +319,8 @@ mod arg_tests {
             manager: "127.0.0.1:40001".parse()?,
             threads: 1,
             timeout_ms: 5000,
-            config: "".into(),
-            params: "".into(),
+            config: String::new(),
+            params: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())
@@ -324,8 +334,8 @@ mod arg_tests {
             manager: "127.0.0.1:40001".parse()?,
             threads: 2,
             timeout_ms: 0,
-            config: "".into(),
-            params: "".into(),
+            config: String::new(),
+            params: String::new(),
         };
         assert!(args.sanitize().is_err());
         Ok(())

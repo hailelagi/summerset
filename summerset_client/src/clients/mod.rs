@@ -22,7 +22,7 @@ pub(crate) enum ClientMode {
 }
 
 impl ClientMode {
-    /// Parse command line string into ClientMode enum.
+    /// Parse command line string into `ClientMode` enum.
     pub(crate) fn parse_name(name: &str) -> Option<Self> {
         match &name.to_lowercase()[..] {
             "repl" => Some(Self::Repl),

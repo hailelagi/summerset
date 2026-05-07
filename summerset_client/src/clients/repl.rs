@@ -143,6 +143,7 @@ impl ClientRepl {
     ///   - `Some(Some((ka, kb)))` if a specified range
     ///   - `Some(None)` if a full range
     ///   - `None` if a conf reset indicated
+    #[allow(clippy::option_option)]
     fn parse_conf_key_range(
         range_str: &str,
     ) -> Result<Option<Option<(String, String)>>, SummersetError> {
@@ -154,20 +155,21 @@ impl ClientRepl {
                 for s in range_str.trim().split('-') {
                     range.push(s.to_string());
                 }
-                if range.len() != 2 {
-                    logged_err!("invalid key_range: {}", range_str)
-                } else {
+                if range.len() == 2 {
                     let mut range_drain = range.into_iter();
                     Ok(Some(Some((
                         range_drain.next().unwrap(),
                         range_drain.next().unwrap(),
                     ))))
+                } else {
+                    logged_err!("invalid key_range: {}", range_str)
                 }
             }
         }
     }
 
     /// Reads in user input and parses into a command.
+    #[allow(clippy::unused_async)]
     async fn read_command(&mut self) -> Result<ReplCommand, SummersetError> {
         self.input_buf.clear();
         let nread = io::stdin().read_line(&mut self.input_buf)?;
@@ -356,6 +358,7 @@ impl ClientRepl {
     }
 
     /// Prints control request reply.
+    #[allow(clippy::unused_self)]
     fn print_ctrl_reply(&mut self, reply: CtrlReply) {
         match reply {
             CtrlReply::ResetServers { servers } => {
@@ -385,6 +388,7 @@ impl ClientRepl {
 
     /// One iteration of the REPL loop. On success, returns a boolean that's
     /// false only when exiting.
+    #[allow(clippy::iter_not_returning_iterator)]
     async fn iter(&mut self) -> Result<bool, SummersetError> {
         Self::print_prompt();
 
